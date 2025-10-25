@@ -1,0 +1,19 @@
+{
+  "name": "pb-bun-server",
+  "version": "0.1.0",
+  "description": "PocketBase-compatible API server with Bun and SQL",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "db:setup": "bun src/scripts/setup-db.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "pocketbase": "../js-sdk"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
