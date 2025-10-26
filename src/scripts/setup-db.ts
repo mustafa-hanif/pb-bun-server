@@ -38,6 +38,21 @@ await db`
   )
 `;
 
+// Superusers table (admins)
+await db`
+  CREATE TABLE IF NOT EXISTS _superusers (
+    id TEXT PRIMARY KEY,
+    created TEXT NOT NULL,
+    updated TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE,
+    password TEXT NOT NULL,
+    avatar TEXT,
+    verified INTEGER DEFAULT 1
+  )
+`;
+
 // Categories table
 await db`
   CREATE TABLE IF NOT EXISTS categories (
@@ -115,6 +130,19 @@ for (const user of users) {
     INSERT OR IGNORE INTO ${sql('users')} 
     (id, created, updated, name, email, username, password, verified) 
     VALUES (${user.id}, ${now}, ${now}, ${user.name}, ${user.email}, ${user.username}, ${user.password}, 1)
+  `;
+}
+
+// Sample superusers (admins)
+const superusers = [
+  { id: 'admin1xxxxxxxxx', name: 'Admin User', email: 'admin@example.com', username: 'admin', password: 'admin123' },
+];
+
+for (const superuser of superusers) {
+  await db`
+    INSERT OR IGNORE INTO ${sql('_superusers')} 
+    (id, created, updated, name, email, username, password, verified) 
+    VALUES (${superuser.id}, ${now}, ${now}, ${superuser.name}, ${superuser.email}, ${superuser.username}, ${superuser.password}, 1)
   `;
 }
 
@@ -207,6 +235,7 @@ console.log('✅ Database setup complete!');
 console.log('');
 console.log('Sample data created:');
 console.log('  - 3 users');
+console.log('  - 1 superuser (admin@example.com / admin123)');
 console.log('  - 2 categories');
 console.log('  - 3 posts');
 console.log('  - 3 comments');
@@ -214,5 +243,7 @@ console.log('');
 console.log('Try these queries with the PocketBase SDK:');
 console.log('  pb.collection("posts").getList(1, 10, { expand: "authorId,categoryId" })');
 console.log('  pb.collection("comments").getList(1, 10, { expand: "postId.authorId" })');
+console.log('  pb.collection("_superusers").authWithPassword("admin@example.com", "admin123")');
+console.log('  pb.collection("users").impersonate("user1xxxxxxxxxx", 3600)');
 
 await db.close();

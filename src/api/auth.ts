@@ -308,19 +308,126 @@ export class AuthAPI {
       }
     });
 
+    // Impersonate - allows superusers to authenticate as any user
+    app.post('/:collection/impersonate/:recordId', async (c) => {
+      const collection = c.req.param('collection');
+      const recordId = c.req.param('recordId');
+
+      try {
+        // Verify the requesting user is a superuser
+        const authHeader = c.req.header('Authorization');
+        if (!authHeader) {
+          return c.json(
+            {
+              code: 401,
+              message: 'Missing or invalid Authorization header.',
+              data: {},
+            },
+            401
+          );
+        }
+
+        // Support both "Bearer token" and "token" formats
+        const token = authHeader.startsWith('Bearer ') 
+          ? authHeader.substring(7) 
+          : authHeader;
+        const decoded = this.verifyToken(token);
+        
+        if (!decoded) {
+          return c.json(
+            {
+              code: 401,
+              message: 'Invalid or expired token.',
+              data: {},
+            },
+            401
+          );
+        }
+
+        // Check if the authenticated user is a superuser
+        // Check both collectionId (new format) and collection (legacy)
+        const isSuperuser = decoded.collectionId === 'pbc_3142635823' || 
+                           decoded.collectionId === '_superusers' ||
+                           decoded.collection === '_superusers';
+        
+        if (!isSuperuser) {
+          return c.json(
+            {
+              code: 403,
+              message: 'Only superusers can impersonate other users.',
+              data: {},
+            },
+            403
+          );
+        }
+
+        // Get the target record to impersonate
+        const results = await this.db`
+          SELECT * FROM ${sql(collection)} 
+          WHERE id = ${recordId}
+          LIMIT 1
+        `;
+
+        if (!results || results.length === 0) {
+          return c.json(
+            {
+              code: 404,
+              message: 'Record not found.',
+              data: {},
+            },
+            404
+          );
+        }
+
+        const record = results[0];
+
+        // Get duration from request body (optional, defaults to 7 days)
+        const body = await c.req.json().catch(() => ({}));
+        const duration = body.duration || (7 * 24 * 60 * 60); // 7 days default
+
+        // Generate token for the impersonated user
+        const impersonateToken = this.generateToken(record.id, collection, duration);
+
+        // Remove sensitive fields
+        delete record.password;
+        delete record.passwordHash;
+        delete record.tokenKey;
+
+        // Add collectionName
+        record.collectionName = collection;
+
+        return c.json({
+          token: impersonateToken,
+          record,
+        });
+      } catch (error: any) {
+        return c.json(
+          {
+            code: 400,
+            message: error.message,
+            data: {},
+          },
+          400
+        );
+      }
+    });
+
     return app;
   }
 
   /**
    * Generate a simple auth token (JWT in production)
    */
-  private generateToken(userId: string, collection: string): string {
+  private generateToken(userId: string, collection: string, durationSeconds?: number): string {
+    // Default to 7 days if not specified
+    const duration = durationSeconds || (7 * 24 * 60 * 60);
+    
     // In production, use proper JWT with signing
     const payload = {
       id: userId,
-      collection,
+      collectionId: collection === '_superusers' ? 'pbc_3142635823' : collection,
       type: 'auth',
-      exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60), // 7 days
+      exp: Math.floor(Date.now() / 1000) + duration,
     };
 
     // Simple base64 encoding for demo (NOT SECURE!)
