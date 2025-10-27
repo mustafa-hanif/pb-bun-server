@@ -5,18 +5,21 @@ import { FilterParser } from '../utils/filter-parser';
 import { SortParser } from '../utils/sort-parser';
 import { ExpandResolver } from '../utils/expand-resolver';
 import { generateId, getCurrentTimestamp } from '../utils/helpers';
+import type { RealtimeAPI } from './realtime';
 
 export class RecordsAPI {
   private db: SQL;
   private filterParser: FilterParser;
   private sortParser: SortParser;
   private expandResolver: ExpandResolver;
+  private realtimeAPI?: RealtimeAPI;
 
-  constructor(db: SQL) {
+  constructor(db: SQL, realtimeAPI?: RealtimeAPI) {
     this.db = db;
     this.filterParser = new FilterParser();
     this.sortParser = new SortParser();
     this.expandResolver = new ExpandResolver(db);
+    this.realtimeAPI = realtimeAPI;
   }
 
   routes() {
@@ -271,6 +274,11 @@ export class RecordsAPI {
         
         // Add collectionName for file URL building
         createdRecord.collectionName = collection;
+
+        // Broadcast realtime event
+        if (this.realtimeAPI) {
+          this.realtimeAPI.broadcastEvent(collection, 'create', createdRecord);
+        }
         
         return c.json(createdRecord);
       } catch (error: any) {
@@ -404,6 +412,11 @@ export class RecordsAPI {
         // Add collectionName for file URL building
         updatedRecord.collectionName = collection;
 
+        // Broadcast realtime event
+        if (this.realtimeAPI) {
+          this.realtimeAPI.broadcastEvent(collection, 'update', updatedRecord);
+        }
+
         return c.json(updatedRecord);
       } catch (error: any) {
         return c.json(
@@ -423,8 +436,24 @@ export class RecordsAPI {
       const id = c.req.param('id');
 
       try {
+        // Fetch the record before deleting (for realtime broadcast)
+        let deletedRecord = null;
+        if (this.realtimeAPI) {
+          const results = await this.db`SELECT * FROM ${sql(collection)} WHERE id = ${id}`;
+          deletedRecord = results[0];
+          if (deletedRecord) {
+            deletedRecord.collectionName = collection;
+          }
+        }
+
         // Use tagged template literal for DELETE
         await this.db`DELETE FROM ${sql(collection)} WHERE id = ${id}`;
+
+        // Broadcast realtime event
+        if (this.realtimeAPI && deletedRecord) {
+          this.realtimeAPI.broadcastEvent(collection, 'delete', deletedRecord);
+        }
+
         return c.body(null, 204);
       } catch (error: any) {
         return c.json(
