@@ -10,6 +10,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.2",
     "eventsource": "^4.0.0",
     "hono": "^4.0.0",
     "pocketbase": "../js-sdk"

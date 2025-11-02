@@ -4,6 +4,7 @@ import { sql, s3 } from 'bun';
 import { FilterParser } from '../utils/filter-parser';
 import { SortParser } from '../utils/sort-parser';
 import { ExpandResolver } from '../utils/expand-resolver';
+import { SchemaCache } from '../utils/schema-cache';
 import { generateId, getCurrentTimestamp } from '../utils/helpers';
 import type { RealtimeAPI } from './realtime';
 
@@ -12,13 +13,21 @@ export class RecordsAPI {
   private filterParser: FilterParser;
   private sortParser: SortParser;
   private expandResolver: ExpandResolver;
+  private schemaCache: SchemaCache;
   private realtimeAPI?: RealtimeAPI;
 
   constructor(db: SQL, realtimeAPI?: RealtimeAPI) {
     this.db = db;
     this.filterParser = new FilterParser();
     this.sortParser = new SortParser();
-    this.expandResolver = new ExpandResolver(db);
+    
+    // Initialize schema cache
+    this.schemaCache = new SchemaCache(db);
+    this.schemaCache.initialize().catch(err => {
+      console.error('Failed to initialize schema cache:', err);
+    });
+    
+    this.expandResolver = new ExpandResolver(db, this.schemaCache);
     this.realtimeAPI = realtimeAPI;
   }
 

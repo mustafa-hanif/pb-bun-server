@@ -1,10 +1,9 @@
 import { Hono } from 'hono';
-import { stream } from 'hono/streaming';
 import type { SQL } from 'bun';
 import { generateId } from '../utils/helpers';
 
 interface ClientConnection {
-  controller: ReadableStreamDefaultController;
+  controller: ReadableStreamDefaultController<Uint8Array>;
   subscriptions: Set<string>;
   lastActive: number;
 }
@@ -47,10 +46,12 @@ export class RealtimeAPI {
 
         // Send heartbeat comment to keep connection alive
         try {
-          client.controller.enqueue(': heartbeat\n\n');
-          client.lastActive = now;
-        } catch {
+          const heartbeat = ': heartbeat\n\n';
+          const encoded = new TextEncoder().encode(heartbeat);
+          client.controller.enqueue(encoded);
+        } catch (error) {
           // Connection is dead, cleanup
+          console.log(`💔 Failed to send heartbeat to ${clientId}, disconnecting`);
           this.disconnectClient(clientId);
         }
       }
@@ -103,7 +104,8 @@ export class RealtimeAPI {
         try {
           const event: RecordEvent = { action, record };
           const eventData = `event: ${eventName}\ndata: ${JSON.stringify(event)}\n\n`;
-          client.controller.enqueue(eventData);
+          const encoded = new TextEncoder().encode(eventData);
+          client.controller.enqueue(encoded);
           client.lastActive = Date.now();
           broadcastCount++;
         } catch (error) {
@@ -137,66 +139,79 @@ export class RealtimeAPI {
     return false;
   }
 
-  routes() {
-    const app = new Hono();
+  /**
+   * Handle realtime connection using native Bun HTTP primitives
+   */
+  handleNativeRequest(req: Request): Response {
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+          'Access-Control-Max-Age': '86400',
+        },
+      });
+    }
 
-    // GET /api/realtime - Open SSE connection
-    app.get('/', (c) => {
-      // Generate unique client ID
-      const clientId = 'client_' + generateId();
+    // Only handle GET requests for SSE
+    if (req.method !== 'GET') {
+      return new Response('Method not allowed', { 
+        status: 405,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    }
 
-      console.log(`🔗 New realtime connection: ${clientId}`);
+    const clientId = 'client_' + generateId();
+    console.log(`🔗 New realtime connection: ${clientId}`);
 
-      // Set SSE headers before streaming
-      c.header('Content-Type', 'text/event-stream');
-      c.header('Cache-Control', 'no-cache');
-      c.header('Connection', 'keep-alive');
-      c.header('X-Accel-Buffering', 'no');
-
-      return stream(c, async (stream) => {
-        // Set SSE headers before streaming
-        stream.onAbort(() => {
-          console.log(`🔌 Client aborted: ${clientId}`);
-          this.disconnectClient(clientId);
-        });
-
-        // Store client connection with a write function
-        const writeToClient = (data: string) => {
-          try {
-            stream.write(data);
-          } catch (error) {
-            console.error(`Failed to write to client ${clientId}:`, error);
-            this.disconnectClient(clientId);
-          }
-        };
-
+    // Create a readable stream for SSE
+    const stream = new ReadableStream({
+      start: async (controller) => {
+        // Store client connection
         this.clients.set(clientId, {
-          controller: {
-            enqueue: writeToClient,
-            close: () => {
-              // Stream will be closed automatically
-            },
-          } as any,
+          controller,
           subscriptions: new Set(),
           lastActive: Date.now(),
         });
 
-        // Send PB_CONNECT event with clientId as lastEventId
-        await stream.writeln(`event: PB_CONNECT`);
-        await stream.writeln(`id: ${clientId}`);
-        await stream.writeln(`data: ${JSON.stringify({ clientId })}`);
-        await stream.writeln('');
+        // Send PB_CONNECT event
+        const connectEvent = `event: PB_CONNECT\nid: ${clientId}\ndata: ${JSON.stringify({ clientId })}\n\n`;
+        controller.enqueue(new TextEncoder().encode(connectEvent));
 
         console.log(`✅ Client connected: ${clientId} (${this.clients.size} active)`);
-
-        // Keep the connection open indefinitely
-        // We don't need to do anything here - the stream stays open until the client disconnects
-        // or we explicitly close it via disconnectClient()
-        await new Promise(() => {}); // Never resolves, keeps connection open
-      });
+      },
+      cancel: () => {
+        console.log(`🔌 Client cancelled: ${clientId}`);
+        this.disconnectClient(clientId);
+      },
     });
 
+    // Return SSE response with proper headers including CORS
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+        'Access-Control-Expose-Headers': 'Content-Length, Content-Range',
+      },
+    });
+  }
+
+  routes() {
+    const app = new Hono();
+
     // POST /api/realtime - Manage subscriptions
+    // (GET is handled by handleNativeRequest in server.ts)
     app.post('/', async (c) => {
       try {
         const body = await c.req.json();

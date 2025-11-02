@@ -30,6 +30,7 @@ app.route('/api/health', healthAPI.routes());
 
 // Realtime API (created first, no dependencies)
 const realtimeAPI = new RealtimeAPI(db);
+// Mount POST handler for subscriptions (GET handled natively in fetch)
 app.route('/api/realtime', realtimeAPI.routes());
 
 // Records API (with realtime support)
@@ -54,7 +55,23 @@ app.route('/api/settings', settingsAPI.routes());
 
 console.log('🚀 PocketBase-compatible server running on http://localhost:8090');
 
+// Use Bun's native server with custom fetch handler for realtime
 export default {
   port: 8090,
-  fetch: app.fetch,
+  fetch: async (req: Request) => {
+    const url = new URL(req.url);
+    
+    // Handle realtime endpoint with native Bun response (GET and OPTIONS)
+    if (url.pathname === '/api/realtime' && (req.method === 'GET' || req.method === 'OPTIONS')) {
+      return realtimeAPI.handleNativeRequest(req);
+    }
+    
+    // Handle realtime POST (subscriptions) with Hono (includes CORS middleware)
+    if (url.pathname === '/api/realtime' && req.method === 'POST') {
+      return app.fetch(req);
+    }
+    
+    // All other routes through Hono
+    return app.fetch(req);
+  },
 };

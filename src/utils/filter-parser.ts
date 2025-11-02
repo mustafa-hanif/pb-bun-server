@@ -10,6 +10,10 @@ export class FilterParser {
   parse(filter: string): { sql: string; values: any[] } {
     const values: any[] = [];
     
+    // First, handle the ?= operator BEFORE extracting values
+    // Replace field.subfield ?= with field ?= (strip dot notation for array contains)
+    filter = filter.replace(/(\w+)\.(\w+)\s*\?=/g, '$1 ?=');
+    
     // Replace PocketBase operators with SQL equivalents
     let sql = filter
       .replace(/&&/g, ' AND ')
@@ -45,13 +49,22 @@ export class FilterParser {
       }
     });
 
-    // Now handle LIKE operators - wrap the placeholder value in % for partial matching
-    // We need to track which value indices are for LIKE operations
+    // Track which value indices are for special operators
     const likeIndices: number[] = [];
+    const arrayContainsIndices: number[] = [];
     let valueIndex = 0;
     
+    // Handle LIKE operators (~) - wrap the placeholder value in % for partial matching
     sql = sql.replace(/~\s*\?/g, () => {
       likeIndices.push(valueIndex);
+      valueIndex++;
+      return 'LIKE ?';
+    });
+
+    // Handle array contains operator (?=) - check if JSON array contains value
+    // Converts: field ?= ? to: field LIKE ?
+    sql = sql.replace(/\?=\s*\?/g, () => {
+      arrayContainsIndices.push(valueIndex);
       valueIndex++;
       return 'LIKE ?';
     });
@@ -60,6 +73,14 @@ export class FilterParser {
     for (const idx of likeIndices) {
       if (values[idx] !== null && values[idx] !== undefined) {
         values[idx] = `%${values[idx]}%`;
+      }
+    }
+
+    // Wrap array contains values for JSON array matching
+    for (const idx of arrayContainsIndices) {
+      if (values[idx] !== null && values[idx] !== undefined) {
+        // For JSON arrays stored as strings, wrap with quotes and %
+        values[idx] = `%"${values[idx]}"%`;
       }
     }
 

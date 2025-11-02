@@ -1,4 +1,5 @@
 import { SQL, sql } from 'bun';
+import { SchemaCache } from './schema-cache';
 
 /**
  * Resolves PocketBase expand relationships
@@ -10,34 +11,16 @@ import { SQL, sql } from 'bun';
  * - "comments(created)" - relation with sort
  * - "comments(created:desc)" - relation with desc sort
  * 
- * This implementation handles basic expand cases.
- * For production, you'd need a schema definition to know field types.
+ * This implementation uses schema metadata from _collections table
+ * to accurately resolve relation field mappings.
  */
 export class ExpandResolver {
   private db: SQL;
-  private schemaCache: Map<string, CollectionSchema> = new Map();
+  private schemaCache: SchemaCache;
 
-  constructor(db: SQL) {
+  constructor(db: SQL, schemaCache: SchemaCache) {
     this.db = db;
-    this.loadSchemas();
-  }
-
-  /**
-   * Load collection schemas from _collections metadata table
-   * In a real implementation, you'd have a proper schema definition
-   */
-  private async loadSchemas() {
-    try {
-      // Try to load from metadata table if it exists
-      const collections = await this.db`SELECT * FROM ${sql('_collections')}`;
-      
-      for (const col of collections) {
-        this.schemaCache.set((col as any).name, JSON.parse((col as any).schema));
-      }
-    } catch {
-      // If no metadata table, we'll infer from queries
-      console.log('No schema metadata found, will infer from data');
-    }
+    this.schemaCache = schemaCache;
   }
 
   /**
@@ -177,23 +160,69 @@ export class ExpandResolver {
     collection: string,
     field: string
   ): { collection: string; type: 'single' | 'multiple' } | null {
-    // Check schema cache
-    const schema = this.schemaCache.get(collection);
-    if (schema && schema.fields[field]) {
-      return schema.fields[field];
+    // Check schema cache for accurate relation mapping
+    const relationCollection = this.schemaCache.getRelationCollection(collection, field);
+    
+    if (relationCollection) {
+      // We have schema metadata - use it!
+      return { 
+        collection: relationCollection, 
+        type: 'multiple' // Will be determined at runtime by checking if value is array
+      };
     }
 
-    // Infer from field naming conventions
-    // Convention: userId -> single relation to "users"
-    //            categoryId -> single relation to "categories"
-    //            tags -> multiple relation (array field)
-    if (field.endsWith('Id')) {
-      const relCollection = field.slice(0, -2) + 's'; // userId -> users
-      return { collection: relCollection, type: 'single' };
+    // Fallback: Infer from field naming conventions
+    // Convention: userId or user_id -> relation to "users"
+    //            categoryId or category_id -> relation to "categories"
+    //            pb_user_id -> relation to "users" (strip prefix)
+    
+    // Check for _id suffix (handles both userId and user_id)
+    if (field.endsWith('_id') || field.endsWith('Id')) {
+      // Extract the base name
+      let baseName = field.endsWith('_id') 
+        ? field.slice(0, -3)  // Remove _id
+        : field.slice(0, -2); // Remove Id
+      
+      // Strip common prefixes like pb_, fk_, etc.
+      baseName = baseName.replace(/^(pb_|fk_|rel_)/, '');
+      
+      // Pluralize: user -> users, category -> categories
+      const relCollection = this.pluralize(baseName);
+      
+      // Determine if it's single or multiple by checking the actual field value
+      // For now, assume _id fields can be either single or array
+      return { collection: relCollection, type: 'multiple' };
     }
 
     // Assume plural fields are multiple relations
     return { collection: field, type: 'multiple' };
+  }
+
+  /**
+   * Simple pluralization helper
+   */
+  private pluralize(word: string): string {
+    // Handle special cases
+    const irregulars: { [key: string]: string } = {
+      'person': 'people',
+      'child': 'children',
+      'category': 'categories',
+    };
+
+    if (irregulars[word]) {
+      return irregulars[word];
+    }
+
+    // Simple rules
+    if (word.endsWith('y')) {
+      return word.slice(0, -1) + 'ies'; // category -> categories
+    }
+    
+    if (word.endsWith('s') || word.endsWith('x') || word.endsWith('ch') || word.endsWith('sh')) {
+      return word + 'es';
+    }
+
+    return word + 's';
   }
 
   /**

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { SQL } from 'bun';
 import { sql } from 'bun';
 import { generateId, getCurrentTimestamp } from '../utils/helpers';
+import bcrypt from 'bcryptjs';
 
 interface AuthResponse {
   token: string;
@@ -71,10 +72,10 @@ export class AuthAPI {
           );
         }
 
-        // Query for user by email or username
+        // Query for user by email
         const results = await this.db`
           SELECT * FROM ${sql(collection)} 
-          WHERE (email = ${identity} OR username = ${identity})
+          WHERE email = ${identity}
           LIMIT 1
         `;
 
@@ -93,7 +94,9 @@ export class AuthAPI {
 
         // In a real implementation, you would verify the password hash here
         // For now, we'll just check if the password field matches (NOT SECURE - demo only!)
-        if (record.password !== password && !this.verifyPassword(password, record.password)) {
+        const isValidPassword = await this.verifyPassword(password, record.password);
+        
+        if (!isValidPassword) {
           return c.json(
             {
               code: 400,
@@ -454,11 +457,19 @@ export class AuthAPI {
   }
 
   /**
-   * Verify password (in production, use bcrypt)
+   * Verify password using bcrypt
    */
-  private verifyPassword(plaintext: string, hash: string): boolean {
-    // In production, use bcrypt.compare()
-    // For demo, just do string comparison
-    return plaintext === hash;
+  private async verifyPassword(plaintext: string, hash: string): Promise<boolean> {
+    try {
+      // Check if it's a bcrypt hash
+      if (hash.startsWith('$2a$') || hash.startsWith('$2b$') || hash.startsWith('$2y$')) {
+        return await bcrypt.compare(plaintext, hash);
+      }
+      
+      // Fall back to plain text comparison (insecure, for demo/testing only)
+      return plaintext === hash;
+    } catch (error) {
+      return false;
+    }
   }
 }

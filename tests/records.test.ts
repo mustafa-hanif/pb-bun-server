@@ -311,6 +311,20 @@ describe('PocketBase Filter Tests', () => {
     });
     expect(lte.items.length).toBeGreaterThan(0);
   });
+
+  test('should filter with array contains operator (?=)', async () => {
+    // Test array contains - posts with "test" tag
+    const result = await pb.collection('posts').getList(1, 20, {
+      filter: 'tags ?= "test"'
+    });
+
+    expect(result.items.length).toBeGreaterThan(0);
+    for (const post of result.items) {
+      // tags is a JSON array stored as string
+      const tags = typeof post.tags === 'string' ? JSON.parse(post.tags) : post.tags;
+      expect(tags).toContain('test');
+    }
+  });
 });
 
 describe('PocketBase List Methods', () => {
