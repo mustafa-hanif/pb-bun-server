@@ -12,7 +12,8 @@ import { SQL } from 'bun';
 const app = new Hono();
 
 // Use Bun's new unified SQL API - can easily switch between SQLite, PostgreSQL, or MySQL
-const db = new SQL('sqlite://data.db');
+// const db = new SQL('sqlite://data.db');
+const db = new SQL('postgres://dbadmin:Jojo.3344@wetarseel-dev-postgres-v2.c78288muwwks.me-central-1.rds.amazonaws.com:5432/wetarseel?ssl=true&sslmode=require&rejectUnauthorized=false');
 
 // Enable CORS for frontend development with proper configuration
 app.use('/*', cors({
